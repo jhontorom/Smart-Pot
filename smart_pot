@@ -1,20 +1,60 @@
 import pyupm_grovemoisture as upmMoisture
 import pyupm_grove as grove
-import pyupm_grovemoisture as upmMoisture
-import pyupm_grove as grove
 import pyupm_i2clcd as lcd
 import mraa
+import SimpleHTTPServer
+import SocketServer
+import logging
+import cgi
 import time
 import sys
-import math
 import os
+import math
+import threading
+
+f = os.popen('ifconfig wlan0 | grep "inet\ addr" | cut -d: -f2 | cut -d" " -f1')
+IP= f.read().strip()
+I = ""
+PORT=8000
+
+class ServerHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+
+    def do_GET(self):
+        logging.warning("======= GET STARTED =======")
+        logging.warning(self.headers)
+        SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+
+    def do_POST(self):
+        logging.warning("======= POST STARTED =======")
+        logging.warning(self.headers)
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={'REQUEST_METHOD':'POST',
+                     'CONTENT_TYPE':self.headers['Content-Type'],
+                     })
+        logging.warning("======= POST VALUES =======")
+        for item in form.list:
+            logging.warning(item)
+            file = open("/home/root/output.txt", "wb")
+            file.write(str(form));
+            file.close()
+            print form
+        logging.warning("\n")
+        SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+		
+def daemonServer(IP):
+	Handler = ServerHandler
+	httpd = SocketServer.TCPServer(("", PORT), Handler)
+	print "Serving at: http://%(interface)s:%(port)s" % dict(interface=I or "localhost", port=PORT)
+	httpd.serve_forever()
 
 #Initialize ports
 # Create the temperature sensor object using AIO pin A0
 #temp = mraa.Aio(0)
 temp = grove.GroveTemp(0)
 
-# Instantiate a Grove Moisture sensor on GPIO pin 7
+# Instantiate a Grove Moisture sensor on GPIO on  pin 7
 myMoisture = mraa.Gpio(7)
 myMoisture.dir(mraa.DIR_IN)
 
@@ -41,7 +81,7 @@ myLcd.write("Instrumentacion")
 time.sleep(3)
 
 # Green
-#myLcd.setColor(255, 255, 102)
+myLcd.setColor(255, 255, 102)
 myLcd.clear()
 myLcd.setCursor(0,3)
 myLcd.write("Jhon Toro")
@@ -49,28 +89,42 @@ myLcd.setCursor(1,0)
 myLcd.write("Osvaldo Renteria")
 time.sleep(3)
 
+my_threads = {}
+my_threads["daemonServer"] = threading.Thread(target=daemonServer, args=[IP])
+my_threads["daemonServer"].start()
+ready_alarm=1
+
 while 1:
+	water_flag = open("/home/root/output.txt", "rb")
+	wfs = water_flag.read()
+	water_flag.close()
+	order_water=wfs[44:45]
+	date_water=wfs[49:51]+':'+wfs[51:53]
+	curr_time=time.asctime( time.localtime(time.time()) )[11:16]
+	if (curr_time==date_water):
+		alarm=1
+	else:
+		ready_alarm=1
+		alarm=0
         T = temp.value()
         tempval = "Temp:"+ str(T)
         M = myMoisture.read()
         stateButton = button.value()
 	IP_request = button_req.value()
+        
+	if (IP_request==1):
+		while 1:
+			if IP != "" : break
+			time.sleep(2)
+		myLcd.clear()
+	        myLcd.setCursor(0,3)
+       		myLcd.write("SMART  POT")
+		myLcd.setCursor(1,0)
+		myLcd.write(IP)
+		time.sleep(6)
 
-	#Pedir IP de Edison
-        if (IP_request==1):
-                while 1:
-                        f = os.popen('ifconfig wlan0 | grep "inet\ addr" | cut $
-                        IP= f.read().strip()
-                        if IP != "" : break
-                        time.sleep(2)
-                myLcd.clear()
-                myLcd.setCursor(0,3)
-                myLcd.write("SMART  POT")
-                myLcd.setCursor(1,0)
-                myLcd.write(IP)
-                time.sleep(6)
-
-        if (stateButton==1):
+	if (stateButton==1 or order_water=='1' or (alarm==1 and ready_alarm==1)):
+		ready_alarm=0
                 # Green
                 myLcd.setColor(255, 51, 51)
                 myLcd.clear()
@@ -80,9 +134,12 @@ while 1:
                 myLcd.write("Riego  Encendido")
                 relay.on()
                 time.sleep(6)
+		water_flag = open("/home/root/output.txt", "wb")
+        	water_flag.write("FieldStorage(None, None, [MiniFieldStorage('0', '"+date_water+"')])")
+        	water_flag.close()
         else:
              	relay.off()
-
+        
         if (M==1):
                 moistureval = "Soil:DRY"
                 Motor = "Riego Encendido"
@@ -92,7 +149,7 @@ while 1:
                 Motor = "Riego Apagado"
                 relay.off()
 	  
-         # Green
+         # Blue
         myLcd.setColor(36, 171, 229)
         myLcd.clear()
         myLcd.setCursor(0,0)
@@ -102,3 +159,9 @@ while 1:
         myLcd.setCursor(1,1)
         myLcd.write(Motor)
         time.sleep(1)
+        output = open('Smart_Pot_out.txt', 'wb+')
+        T_out=str(T)
+        M_out=str(M)
+        output.write(T_out+M_out)
+        output.close()
+        
